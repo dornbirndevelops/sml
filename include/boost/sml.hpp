@@ -690,13 +690,15 @@ constexpr T &get_by_id(tuple_type<N, T> *object) {
 //   5. pool_type<const T*>*    → const T* by pointer    (exact const-ptr match)
 //   6. pool_type<T*&>*         → T* (strip ref)         (#485: lvalue ptr wraps as T*&)
 //   7. pool_type<const T*&>*   → const T* (strip ref)   (#485: same for const)
-//   8. pool_type<D&>* (D⊇T)   → T& covariant           (#467: derived mock as base dep)
-//   9. pool_type<const D&>*(D⊇T)→const T& covariant    (#467: same, const variant)
+//   8. pool<.., D&, ..>* (D⊇T) → T& covariant          (#467: derived mock as base dep)
+//   9. pool<.., const D&, ..>* → const T& covariant    (#467: same, const variant)
+//      (8/9 only apply without an exact match 1-7 and with a single candidate D)
 //  10. (...)                   → missing_ctor_parameter  (not in pool → compile error)
 //
 // Known subtleties captured below (search #NNN for the fixing PR):
 //   #467 — non-copyable derived type (e.g. NiceMock<T>) passed as T& dep
 //   #485 — pointer dep passed as lvalue wraps to T*& in forwarding ctor
+//   #715 — MSVC exponential compile time deducing D in #8/#9 from many deps
 //   #504 — dangling ref in pool_type_impl<T&> cross-pool copy ctor
 //   #530 — guard receiving const T& must see live pool value, not a snapshot
 // ──────────────────────────────────────────────────────────────────────────────
@@ -735,12 +737,59 @@ template <class T> constexpr const T    &try_get(const pool_type<const T &> *);/
 template <class T> constexpr T          &try_get(const pool_type<T &> *);      // #2 mutable-ref
 template <class T> constexpr const T    *try_get(const pool_type<const T *> *);// #5 const-ptr
 template <class T> constexpr T          *try_get(const pool_type<T *> *);      // #4 ptr
-// #8/#9 covariant: pool holds D& where D derives from T; return T& via base conversion.
-// The is_same guard excludes the case where T == remove_const_t<D> (same type, different cv).
-template <class T, class D, BOOST_SML_DETAIL_REQUIRES(!aux::is_same<aux::remove_const_t<T>, D>::value && aux::is_base_of<T, D>::value)>
-constexpr T &try_get(const pool_type<D &> *);
-template <class T, class D, BOOST_SML_DETAIL_REQUIRES(!aux::is_same<aux::remove_const_t<T>, D>::value && aux::is_base_of<T, D>::value)>
-constexpr const T &try_get(const pool_type<const D &> *);
+template <class... Ts>
+struct pool;
+
+// #8/#9 covariant: pool holds D& / const D& where D derives from T (#467).
+// The slot is found by scanning the pool's dep list, not by deducing D from a
+// pool_type<D&> base: MSVC's deduction through N matching bases is exponential
+// in N and runs out of heap at ~28 deps (#715).
+// D derives publicly and unambiguously from T. Unlike is_base_of this is false,
+// not ill-formed, for an incomplete D such as a forward-declared reference dep.
+template <class T>
+void implicitly_convert_to(T);
+template <class T, class D>
+decltype(implicitly_convert_to<T *>(declval<D *>()), true_type{}) test_derives_from(int);
+template <class, class>
+false_type test_derives_from(...);
+// TDep is a candidate when it is D& / const D& with D a proper subclass of T.
+template <class T, class TDep>
+struct is_covariant_dep : false_type {};
+template <class T, class D>
+struct is_covariant_dep<T, D &>
+    : integral_constant<bool, !is_same<remove_const_t<T>, remove_const_t<D>>::value &&
+                                  decltype(test_derives_from<remove_const_t<T>, remove_const_t<D>>(0))::value> {};
+// Only a single candidate is used; none or several leave the lookup to the fallback.
+template <class T, class TCandidates>
+struct unique_covariant_dep {};
+template <class T, class D>
+struct unique_covariant_dep<T, type_list<D &>> {
+  using slot = D &;
+  using type = T &;
+};
+template <class T, class D>
+struct unique_covariant_dep<T, type_list<const D &>> {
+  using slot = const D &;
+  using type = const T &;
+};
+// True when one of the exact overloads #1-#7 matches, which must keep priority:
+// the covariant overload takes the pool pointer itself, so it would otherwise win.
+// TSet is inherit<type_wrapper<Ts>...> of the pool's deps.
+template <class T, class TSet>
+struct has_exact_dep
+    : integral_constant<bool, is_base_of<type_wrapper<T>, TSet>::value || is_base_of<type_wrapper<T &>, TSet>::value ||
+                                  is_base_of<type_wrapper<const T &>, TSet>::value || is_base_of<type_wrapper<T *>, TSet>::value ||
+                                  is_base_of<type_wrapper<const T *>, TSet>::value ||
+                                  is_base_of<type_wrapper<T *&>, TSet>::value ||
+                                  is_base_of<type_wrapper<const T *&>, TSet>::value> {};
+// covariant_dep<T, pool<Ts...>>: ::slot is the pool slot to read, ::type the returned reference.
+template <class T, class TPool, class = void>
+struct covariant_dep {};
+template <class T, class... Ts>
+struct covariant_dep<T, pool<Ts...>, enable_if_t<!has_exact_dep<T, inherit<type_wrapper<Ts>...>>::value>>
+    : unique_covariant_dep<T, join_t<conditional_t<is_covariant_dep<T, Ts>::value, type_list<Ts>, type_list<>>...>> {};
+template <class T, class TPool, class TDep = covariant_dep<T, TPool>>
+constexpr typename TDep::type try_get(const TPool *);
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Reference pool slot (BOOST_SML_CREATE_DEFAULT_CONSTRUCTIBLE_DEPS only).
@@ -823,11 +872,11 @@ constexpr const T *try_get(const pool_type<const T *&> *object) { return object-
 
 // #8/#9: pool holds D& / const D& where D derives from T — covariant access.
 // Allows e.g. NiceMock<Base> (non-copyable derived) to satisfy a Base& dep. (#467)
-template <class T, class D, typename aux::enable_if<!aux::is_same<aux::remove_const_t<T>, D>::value && aux::is_base_of<T, D>::value, int>::type>
-constexpr T &try_get(const pool_type<D &> *object) { return object->value; }
-
-template <class T, class D, typename aux::enable_if<!aux::is_same<aux::remove_const_t<T>, D>::value && aux::is_base_of<T, D>::value, int>::type>
-constexpr const T &try_get(const pool_type<const D &> *object) { return object->value; }
+// The slot comes from covariant_dep, see the forward declaration (#715).
+template <class T, class TPool, class TDep>
+constexpr typename TDep::type try_get(const TPool *object) {
+  return static_cast<const pool_type<typename TDep::slot> &>(*object).value;
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 // True when try_get<T> would resolve to the missing_ctor_parameter sentinel.
