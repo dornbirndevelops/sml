@@ -156,3 +156,4 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/issue_715_incomplete_deps.cpp)
 endif()
 
 add_subdirectory(errors)
+add_subdirectory(pool)
