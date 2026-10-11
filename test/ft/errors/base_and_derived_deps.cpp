@@ -15,17 +15,17 @@ const auto idle = sml::state<class idle>;
 struct base {
   int val = 1;
 };
-struct private_derived : private base {};
+struct derived : base {};
 
-// The only dep deriving from the requested type has it as a private base, and a base is
-// also passed by value. A base parameter by value reads that one, but a const base& must
-// not: it would bind the copy that the lookup returns, a dangling temporary.
-struct private_base_dep_next_to_base_by_value {
+// A dep of the requested type itself and one derived from it: the lookup is ambiguous;
+// an exact match does not win (before #715 the exact base& was read next to a derived&,
+// but a const derived& won over it).
+struct base_and_derived_deps {
   auto operator()() const noexcept {
     using namespace sml;
     // clang-format off
     return make_transition_table(
-        *idle + event<e1> / [](const base &, int &) {} = X // base is inaccessible in private_derived
+        *idle + event<e1> / [](base &) {} = X // base& or derived&?
     );
     // clang-format on
   }
@@ -34,8 +34,7 @@ struct private_base_dep_next_to_base_by_value {
 // Only has to fail to compile: common/test.hpp (force-included) already defines main().
 void construct_sm() {
   base b;
-  private_derived d;
-  int i = 0;
-  sml::sm<private_base_dep_next_to_base_by_value> sm{static_cast<base &&>(b), d, i};
+  derived d;
+  sml::sm<base_and_derived_deps> sm{b, d};
   sm.process_event(e1{});
 }

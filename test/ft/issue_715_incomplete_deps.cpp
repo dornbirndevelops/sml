@@ -7,7 +7,7 @@
 //
 // Issue #715: the covariant lookup scans the pool's reference deps, also when a
 // dep is still incomplete where an sm is constructed with it.  A lookup of another
-// type, e.g. of the state machine class, made then must not decide later lookups of
+// type, e.g. of the incomplete dep itself, made then must not decide later lookups of
 // a base of that dep, and nothing may test whether the dep is complete.
 // Not in dependencies.cpp: BOOST_SML_CREATE_DEFAULT_CONSTRUCTIBLE_DEPS tests
 // whether the type of each reference dep is constructible, and gcc 16 warns when
@@ -30,8 +30,8 @@ struct base {
 
 // A dep that is incomplete where a first sm is constructed with it is found as a
 // base once it is complete.  clang instantiates the first sm's constexpr constructor
-// right there, and its lookup of the state machine class tests the incomplete dep:
-// that must not decide the later lookup of the base for the same pool of deps
+// right there, and its lookups of the deps test the incomplete dep: that must not
+// decide the later lookup of the base for the same pool of deps
 // (before, the const base& bound a dangling default object with clang).
 struct completed_later;
 struct sm_constructed_before_dep_is_complete {
@@ -70,8 +70,8 @@ test derived_dep_found_after_sm_constructed_while_incomplete = [] {
 
 // For an sm with static storage gcc tries constant initialization, so it instantiates
 // the constexpr constructor where the sm is defined, while a forward-declared
-// reference dep is still incomplete.  The lookup of the state machine class scans
-// that dep and must not test whether it is complete: gcc 16 warns when the type is
+// reference dep is still incomplete.  The lookups of the deps scan that dep and
+// must not test whether it is complete: gcc 16 warns when the type is
 // defined later (-Wsfinae-incomplete, an error with -Werror).
 struct defined_later;
 struct sm_with_static_storage {

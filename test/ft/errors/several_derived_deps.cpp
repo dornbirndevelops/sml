@@ -18,9 +18,9 @@ struct base {
 struct derived_a : base {};
 struct derived_b : base {};
 
-// Two deps derive from the requested type and neither is the single const one, so the
-// covariant lookup is ambiguous (before #715 it fell back to a default-constructed base,
-// which the const base& bound as a dangling temporary).
+// Two deps derive from the requested type, so the covariant lookup is ambiguous (before
+// #715 it fell back to a default-constructed base, which the const base& bound as a
+// dangling temporary).
 struct several_derived_deps {
   auto operator()() const noexcept {
     using namespace sml;
