@@ -694,9 +694,9 @@ constexpr T &get_by_id(tuple_type<N, T> *object) {
 //   7. pool_type<const T*&>*   → const T* (strip ref)   (#485: same for const)
 //   8. pool<.., D&, ..>* (D⊇T) → T& covariant          (#467: derived mock as base dep)
 //   9. pool<.., const D&, ..>* → const T& covariant    (#467: same, const variant)
-//      (8/9: class T whose only reference dep of, or derived from, T is a D& / const D&
-//       with D derived from T, next to no T, T* or const T*; for a class T, a reference
-//       dep of, or derived from, T next to another dep of, or derived from, T is an error)
+//      (8/9: for a class T, the only dep of, or derived from, T by reference or pointer,
+//       next to no T by value, is read as T&, const T&, T* or const T*; several such
+//       deps are an error)
 //  10. (...)                   → missing_ctor_parameter  (not in pool → compile error)
 //
 // Known subtleties captured below (search #NNN for the fixing PR):
@@ -749,17 +749,37 @@ struct pool;
 // pool_type<D&> base: MSVC's deduction through N matching bases is exponential
 // in N and runs out of heap at ~28 deps (#715).
 // Every lookup of a dep T (try_get_dep) reads the same dep, whether a callable requests
-// T&, const T&, T or T*: a dep derived from T is read only when it is the only reference
-// dep of, or derived from, T and no T, T* or const T* is passed either. With more than one
-// such dep the lookup is ambiguous, a compile error, also when one of them is T itself.
-// A const D& is read as const T&, so it does not bind a T& request (with
-// BOOST_SML_CREATE_DEFAULT_CONSTRUCTIBLE_DEPS, a T& slot then holds a copy of it).
-// covariant_slots<pool<Ts...>> lists, once per pool, the referenced type (D or
-// const D) of each reference dep.
+// T&, const T&, T or T*: the deps of, or derived from, T are its candidates, by
+// reference or by pointer (D&, const D&, D*, const D*, also passed as lvalues), and the
+// lookup reads the only candidate, if no T is passed by value either. With more than
+// one, the lookup is ambiguous, a compile error, also when one of them is T itself or
+// cannot be read for the request, e.g. a D* for a T&.
+// The candidate is read as it is: D& as T&, const D& as const T&, D* as T*, const D*
+// as const T*. So a const D& does not bind a T& request (with
+// BOOST_SML_CREATE_DEFAULT_CONSTRUCTIBLE_DEPS, a T& slot then holds a copy of it), and
+// neither a pointer a reference request, nor an object a pointer request.
+// covariant_slots<pool<Ts...>> lists, once per pool, each reference dep as
+// covariant_ref<D> and each pointer dep as covariant_ptr<pool slot, D>.
+template <class D>
+struct covariant_ref {
+  using target = D;
+};
+template <class TSlot, class D>
+struct covariant_ptr {
+  using target = D;
+};
 template <class TDep>
 struct covariant_slot : type_list<> {};
 template <class D>
-struct covariant_slot<D &> : type_list<D> {};
+struct covariant_slot<D &> : type_list<covariant_ref<D>> {};
+template <class D>
+struct covariant_slot<D *> : type_list<covariant_ptr<D *, D>> {};
+template <class D>
+struct covariant_slot<D *const> : type_list<covariant_ptr<D *const, D>> {};
+template <class D>
+struct covariant_slot<D *&> : type_list<covariant_ptr<D *&, D>> {};
+template <class D>
+struct covariant_slot<D *const &> : type_list<covariant_ptr<D *const &, D>> {};
 template <class TPool>
 struct covariant_slots;
 template <class... Ts>
@@ -784,66 +804,60 @@ template <class T>
 true_type covariant_conv(const volatile T *);
 template <class T>
 false_type covariant_conv(...);
-template <bool, class D>
+template <bool, class TCandidate>
 struct covariant_candidate : type_list<> {};
-template <class D>
-struct covariant_candidate<true, D> : type_list<D &> {};
+template <class TCandidate>
+struct covariant_candidate<true, TCandidate> : type_list<TCandidate> {};
 template <class T, class TSlots>
 struct covariant_candidates;
-template <class T, class... Ds>
-struct covariant_candidates<T, type_list<Ds...>>
-    : join_t<typename covariant_candidate<decltype(aux::covariant_conv<T>(static_cast<Ds *>(nullptr)))::value, Ds>::type...> {};
-// covariant_lookup<T, TCandidates, TExactRef, TExactOther>: ::slot is the pool slot to
-// read, ::type the returned reference. TExactRef: the pool holds T& or const T&, which is
-// then a candidate itself; TExactOther: the pool holds T, T* or const T* (#1, #4-#7).
-// A single candidate that is T& or const T&, or none, leaves the lookup to #1-#7 and
-// the fallback.
-template <class T, class TCandidates, class TExactRef, class TExactOther>
+template <class T, class... TSlots>
+struct covariant_candidates<T, type_list<TSlots...>>
+    : join_t<typename covariant_candidate<
+          decltype(aux::covariant_conv<T>(static_cast<typename TSlots::target *>(nullptr)))::value, TSlots>::type...> {};
+// covariant_lookup<T, TCandidates, TByValue>: ::slot is the pool slot to read, ::type the
+// returned reference or pointer. TByValue: the pool holds T by value, which #1 reads when
+// there is no candidate; none leaves the lookup to #1 and the fallback.
+template <class T, class TCandidates, class TByValue>
 struct covariant_lookup {
   static_assert(never<T>::value,
                 "State Machine has several constructor parameters of, or derived from, a requested type! Check out "
                 "the `covariant_lookup` error to see the type and the candidates.");
 };
-template <class T, class TExactRef, class TExactOther>
-struct covariant_lookup<T, type_list<>, TExactRef, TExactOther> {};
+template <class T, class TByValue>
+struct covariant_lookup<T, type_list<>, TByValue> {};
 template <class T, class D>
-struct covariant_lookup<T, type_list<D &>, true_type, false_type> {};
-template <class T, class D>
-struct covariant_lookup<T, type_list<D &>, false_type, false_type> {
+struct covariant_lookup<T, type_list<covariant_ref<D>>, false_type> {
   using slot = D &;
   using type = T &;
 };
 template <class T, class D>
-struct covariant_lookup<T, type_list<const D &>, false_type, false_type> {
+struct covariant_lookup<T, type_list<covariant_ref<const D>>, false_type> {
   using slot = const D &;
   using type = const T &;
 };
+template <class T, class TSlot, class D>
+struct covariant_lookup<T, type_list<covariant_ptr<TSlot, D>>, false_type> {
+  using slot = TSlot;
+  using type = T *;
+};
+template <class T, class TSlot, class D>
+struct covariant_lookup<T, type_list<covariant_ptr<TSlot, const D>>, false_type> {
+  using slot = TSlot;
+  using type = const T *;
+};
 // TSet is inherit<type_wrapper<Ts>...> of the pool's deps.
 template <class T, class TSet>
-struct has_exact_ref_dep
-    : integral_constant<bool, is_base_of<type_wrapper<T &>, TSet>::value || is_base_of<type_wrapper<const T &>, TSet>::value> {};
-template <class T, class TSet>
-struct has_exact_other_dep
-    : integral_constant<bool, is_base_of<type_wrapper<T>, TSet>::value || is_base_of<type_wrapper<const T>, TSet>::value ||
-                                  is_base_of<type_wrapper<T *>, TSet>::value ||
-                                  is_base_of<type_wrapper<const T *>, TSet>::value ||
-                                  is_base_of<type_wrapper<T *const>, TSet>::value ||
-                                  is_base_of<type_wrapper<const T *const>, TSet>::value ||
-                                  is_base_of<type_wrapper<T *&>, TSet>::value ||
-                                  is_base_of<type_wrapper<const T *&>, TSet>::value ||
-                                  is_base_of<type_wrapper<T *const &>, TSet>::value ||
-                                  is_base_of<type_wrapper<const T *const &>, TSet>::value> {};
+struct has_value_dep
+    : integral_constant<bool, is_base_of<type_wrapper<T>, TSet>::value || is_base_of<type_wrapper<const T>, TSet>::value> {};
 // Only a class T can have a derived dep; covariant_conv would take every D for e.g.
 // void (any D* converts to const volatile void*), so any other T stays with #1-#7 and
-// the fallback, and has_exact_ref_dep, which forms T&, is not instantiated for it.
-// T is const for the lookup of a const state machine class, e.g. sm<decltype(c)>.
+// the fallback.
 template <class T, class TPool, class = void>
 struct covariant_dep {};
 template <class T, class... Ts>
 struct covariant_dep<T, pool<Ts...>, enable_if_t<__is_class(T)>>
     : covariant_lookup<T, typename covariant_candidates<T, typename covariant_slots<pool<Ts...>>::type>::type,
-                       typename has_exact_ref_dep<remove_const_t<T>, inherit<type_wrapper<Ts>...>>::type,
-                       typename has_exact_other_dep<remove_const_t<T>, inherit<type_wrapper<Ts>...>>::type> {};
+                       typename has_value_dep<remove_const_t<T>, inherit<type_wrapper<Ts>...>>::type> {};
 template <class T, class TPool, class TDep = covariant_dep<T, TPool>>
 constexpr typename TDep::type try_get_dep(const TPool *, int);
 template <class T, class TPool>

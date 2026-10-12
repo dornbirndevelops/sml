@@ -500,6 +500,28 @@ test const_derived_dep_as_const_base_ref_among_other_const_ref_deps = [] {
   expect(sm.is(sml::X));
 };
 
+// A derived dep passed by pointer is read as a base pointer, like a derived dep passed by
+// reference as a base reference, also next to other deps (before, the base pointer was null).
+test derived_ptr_deps_as_base_ptrs_among_other_deps = [] {
+  struct c715 {
+    auto operator()() noexcept {
+      using namespace sml;
+      auto check = [](base467 *b, const iface715 *f, int &i) { expect(7 == b->val && 2 == f->id() && 42 == i); };
+      // clang-format off
+      return make_transition_table(*idle + event<e1> / check = X);
+      // clang-format on
+    }
+  };
+
+  derived467 derived;
+  derived467 *derived_ptr = &derived;  // an lvalue: the pool holds a derived467 *&
+  const impl715b impl{};
+  int i = 42;
+  sml::sm<c715> sm{derived_ptr, &impl, i};
+  sm.process_event(e1{});
+  expect(sm.is(sml::X));
+};
+
 // void is not a class: its lookup must neither form void& nor take every reference
 // dep as derived from void (any D* converts to void*).  A passed void* dep is read,
 // also next to a covariant lookup; an unpassed one stays the null default.
