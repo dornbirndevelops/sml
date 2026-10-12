@@ -522,6 +522,45 @@ test derived_ptr_deps_as_base_ptrs_among_other_deps = [] {
   expect(sm.is(sml::X));
 };
 
+// A dep that has the requested type as a private base can never be injected as it, so it
+// does not compete with the one that can, by reference or by pointer
+// (errors/private_base_dep.cpp: alone, it does not compile).
+struct private_base715 {
+  int val = 1;
+};
+struct private_derived715 : private private_base715 {};
+
+test private_derived_deps_are_no_candidates = [] {
+  struct by_ref715 {
+    auto operator()() noexcept {
+      using namespace sml;
+      auto check = [](const private_base715 &b) { expect(715 == b.val); };
+      // clang-format off
+      return make_transition_table(*idle + event<e1> / check = X);
+      // clang-format on
+    }
+  };
+  struct by_ptr715 {
+    auto operator()() noexcept {
+      using namespace sml;
+      auto check = [](private_base715 *b) { expect(715 == b->val); };
+      // clang-format off
+      return make_transition_table(*idle + event<e1> / check = X);
+      // clang-format on
+    }
+  };
+
+  private_base715 base;
+  base.val = 715;
+  private_derived715 derived;
+  sml::sm<by_ref715> sm_ref{derived, &derived, base};
+  sm_ref.process_event(e1{});
+  expect(sm_ref.is(sml::X));
+  sml::sm<by_ptr715> sm_ptr{derived, &derived, &base};
+  sm_ptr.process_event(e1{});
+  expect(sm_ptr.is(sml::X));
+};
+
 // void is not a class: its lookup must neither form void& nor take every reference
 // dep as derived from void (any D* converts to void*).  A passed void* dep is read,
 // also next to a covariant lookup; an unpassed one stays the null default.
