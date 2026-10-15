@@ -478,9 +478,6 @@ struct iface715 {
   virtual ~iface715() = default;
   virtual int id() const = 0;
 };
-struct impl715a : iface715 {
-  int id() const override { return 1; }
-};
 struct impl715b : iface715 {
   int id() const override { return 2; }
 };
@@ -502,48 +499,6 @@ test const_derived_dep_as_const_base_ref_among_other_const_ref_deps = [] {
   sm.process_event(e1{});
   expect(sm.is(sml::X));
 };
-
-// With a mutable and a const derived dep, a const lookup reads the single const one,
-// as #9 did before #715.  base467& needs the covariant lookup among other reference deps.
-test const_derived_dep_not_hidden_by_mutable_derived_dep = [] {
-  struct c715 {
-    auto operator()() noexcept {
-      using namespace sml;
-      auto check = [](base467 &b, const iface715 &f) { expect(7 == b.val && 2 == f.id()); };
-      // clang-format off
-      return make_transition_table(*idle + event<e1> / check = X);
-      // clang-format on
-    }
-  };
-
-  derived467 derived;
-  impl715a a;
-  const impl715b b{};
-  sml::sm<c715> sm{derived, a, b};
-  sm.process_event(e1{});
-  expect(sm.is(sml::X));
-};
-
-// A mutable lookup cannot bind a const derived dep, so next to one it reads the single
-// mutable derived dep.
-test mutable_derived_dep_not_hidden_by_const_derived_dep = [] {
-  struct c715 {
-    auto operator()() noexcept {
-      using namespace sml;
-      auto check = [](iface715 &f) { expect(1 == f.id()); };
-      // clang-format off
-      return make_transition_table(*idle + event<e1> / check = X);
-      // clang-format on
-    }
-  };
-
-  impl715a a;
-  const impl715b b{};
-  sml::sm<c715> sm{a, b};
-  sm.process_event(e1{});
-  expect(sm.is(sml::X));
-};
-
 // An exact base467& dep must win over a derived467& dep that would also match covariantly.
 // Without the exact-dep check, base467& itself would be a second candidate (a hard error), or,
 // were it excluded, the covariant overload (taking the pool itself) would win.
@@ -690,32 +645,6 @@ test volatile_derived_dep_is_no_candidate = [] {
   sm.process_event(e1{});
   expect(sm.is(sml::X));
 };
-
-// BOOST_SML_CREATE_DEFAULT_CONSTRUCTIBLE_DEPS (defined above) lets a base& slot hold a
-// copy, also a sliced copy of a const derived dep.  Next to a mutable derived dep the
-// slot binds that one itself, as without the macro.
-test mutable_derived_dep_bound_not_copied_next_to_const_derived_dep = [] {
-  struct c715 {
-    auto operator()() noexcept {
-      using namespace sml;
-      auto check = [](copyable_base715 &b) {
-        expect(715 == b.val);
-        b.val = 42;
-      };
-      // clang-format off
-      return make_transition_table(*idle + event<e1> / check = X);
-      // clang-format on
-    }
-  };
-
-  copyable_derived715a a;
-  const copyable_derived715b b{};
-  sml::sm<c715> sm{a, b};
-  sm.process_event(e1{});
-  expect(sm.is(sml::X));
-  expect(42 == a.val);
-};
-
 // With several derived deps the base held by value is read, as before #715, when
 // the deduction of D failed, instead of the error for several derived deps.
 test base_held_by_value_read_next_to_several_derived_deps = [] {
