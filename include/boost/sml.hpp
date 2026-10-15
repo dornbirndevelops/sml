@@ -774,8 +774,6 @@ template <class TDep, class TMutable>
 struct covariant_slot : type_list<> {};
 template <class D, class TMutable>
 struct covariant_slot<D &, TMutable> : type_list<D> {};
-template <class D>
-struct covariant_slot<const D &, true_type> : type_list<> {};
 template <class TPool, class TMutable>
 struct covariant_slots;
 template <class... Ts, class TMutable>
@@ -873,8 +871,6 @@ struct several_covariant_deps {
                 "State Machine has several constructor parameters derived from a requested type! Check out the "
                 "`several_covariant_deps` error to see the type and the candidates.");
 };
-template <class T, class TCandidates, class TDep, class TByValue>
-struct several_covariant_deps<T, TCandidates, type_list<TDep>, TByValue> : read_covariant_dep<T, TDep, TByValue> {};
 template <class T, class TByValue, class... TCandidates>
 struct unique_covariant_dep<T, type_list<TCandidates...>, TByValue>
     : several_covariant_deps<T, type_list<TCandidates...>,
