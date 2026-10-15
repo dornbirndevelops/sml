@@ -10,28 +10,39 @@ struct mydependency {
   int value{};
 };
 
-struct myaction { void operator()(mydependency& d, const mydependency& d2) {
+struct mybetterdependency : mydependency {
+  mybetterdependency() { value = 1; }
+};
+
+struct yourbetterdependency : mydependency {
+  yourbetterdependency() { value = 2; }
+};
+
+struct myguard { bool operator()(const mydependency& d) {
+  const void* p = std::addressof(d);
+  std::printf("address of const mydependency& d: %p\n", p);
+  return true;
+} };
+
+struct myaction { void operator()(mydependency& d) {
   void* p = std::addressof(d);
   std::printf("address of mydependency& d: %p\n", p);
-  d.value++;
-
-  const void* p2 = std::addressof(d2);
-  std::printf("address of yourdependency& d2: %p\n", p2);
 } };
 
 struct root { auto operator()() noexcept {
   using namespace boost::sml;
+  const auto g = myguard{};
   const auto a = myaction{};
   return make_transition_table(
-    *"idle"_s + event<myevent> / a = X
+    *"idle"_s + event<myevent> [g] / a = X
   );
 } };
 
 } // namespace
 
 int main() {
-  mydependency d{};
-  const mydependency d2{};
+  mybetterdependency d{};
+  const yourbetterdependency d2{};
   boost::sml::sm<root> sm{d, d2};
   sm.process_event(myevent{});
 }

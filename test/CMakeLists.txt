@@ -27,9 +27,6 @@ target_link_libraries(scenario3 PRIVATE sml::sml)
 add_executable(scenario4 scenario4.cpp)
 target_link_libraries(scenario4 PRIVATE sml::sml)
 
-add_executable(scenario5 scenario5.cpp)
-target_link_libraries(scenario5 PRIVATE sml::sml)
-
 if(IS_COMPILER_OPTION_MSVC_LIKE)
   add_compile_options("-FIcommon/test.hpp")
 elseif(IS_COMPILER_OPTION_GCC_LIKE)

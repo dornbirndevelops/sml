@@ -1017,7 +1017,42 @@ template <class TSlot, class TPool, class T = slot_lookup_t<TSlot>,
 constexpr typename TDep::type try_get_slot(const TPool *object, int) {
   return aux::try_get<T, TPool, TDep>(object);
 }
-template <class TSlot, class TPool>
+// unique_exact_dep<T, pool<Ts...>>: the constructor parameters of T itself, T, T&
+// or const T&. Of several, try_get<T> would silently read one, e.g. the const T& of
+// d + const d2 where the author meant a single instance, so that is a hard error.
+// The pool is the one passed to the sm constructor; the sm's own deps_t never is
+// a source of try_get, so its collapsed T + T& slots are no candidates here.
+// It scans the dep list instead of deducing from pool_type bases, see #715.
+template <class T, class TDep>
+struct exact_dep : type_list<> {};
+template <class T>
+struct exact_dep<T, T> : type_list<T> {};
+template <class T>
+struct exact_dep<T, const T> : type_list<const T> {};
+template <class T>
+struct exact_dep<T, T &> : type_list<T &> {};
+template <class T>
+struct exact_dep<T, const T &> : type_list<const T &> {};
+template <class T, class TCandidates>
+struct ambiguous_ctor_parameter {
+  static_assert(never<T>::value,
+                "State Machine has ambiguous constructor parameters! A requested type is passed more than once (as T, "
+                "T& or const T&). Check out the `ambiguous_ctor_parameter` error to see the type and the candidates.");
+  using type = T;
+};
+template <class T, class TCandidates>
+struct check_exact_deps : ambiguous_ctor_parameter<T, TCandidates> {};
+template <class T>
+struct check_exact_deps<T, type_list<>> : identity<T> {};
+template <class T, class TDep>
+struct check_exact_deps<T, type_list<TDep>> : identity<T> {};
+template <class T, class TPool>
+struct unique_exact_dep;
+template <class T, class... Ts>
+struct unique_exact_dep<T, pool<Ts...>> : check_exact_deps<T, join_t<typename exact_dep<T, Ts>::type...>> {};
+// The check is a default template argument, so that it fires when the call is
+// resolved, before the slot fails to bind what try_get<T> read.
+template <class TSlot, class TPool, class = typename unique_exact_dep<slot_lookup_t<TSlot>, TPool>::type>
 constexpr decltype(auto) try_get_slot(const TPool *object, ...) {
   return aux::try_get<slot_lookup_t<TSlot>>(object);
 }

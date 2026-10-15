@@ -212,7 +212,7 @@ test transition_table_types = [] {
   };
 
   float f = 12.0;
-  sml::sm<c> sm{f, 42, 87.0, 0.0f};
+  sml::sm<c> sm{f, 42, 87.0};
 };
 
 // Issue #389: two member-function-pointer actions combined with operator,
